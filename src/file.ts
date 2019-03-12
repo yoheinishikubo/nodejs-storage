@@ -39,7 +39,7 @@ import * as http from 'http';
 import * as r from 'request';  // Only for type declarations.
 import {teenyRequest} from 'teeny-request';
 
-import {Storage} from './storage';
+import {GetUrlSignatureOptions, HTTP_VERB, SignedUrlQuery, Storage} from './storage';
 import {Bucket} from './bucket';
 import {Acl} from './acl';
 import {ResponseBody, ApiError} from '@google-cloud/common/build/src/util';
@@ -60,18 +60,6 @@ export interface GetSignedUrlConfig {
   promptSaveAs?: string;
   responseDisposition?: string;
   responseType?: string;
-}
-
-interface GetSignedUrlConfigInternal {
-  action: string;
-  resource?: string;
-  extensionHeaders?: http.OutgoingHttpHeaders;
-  contentMd5?: string;
-  contentType?: string;
-  promptSaveAs?: string;
-  responseType?: string;
-  responseDisposition?: string;
-  cname?: string;
 }
 
 export type GetSignedUrlResponse = [string];
@@ -284,15 +272,6 @@ interface FileQuery {
   alt: string;
   generation?: number;
   userProject?: string;
-}
-
-interface SignedUrlQuery {
-  GoogleAccessId: string;
-  Expires: number;
-  Signature: string;
-  generation: number;
-  'response-content-type': string;
-  'response-content-disposition': string;
 }
 
 export interface CreateReadStreamOptions {
@@ -2275,32 +2254,20 @@ class File extends ServiceObject<File> {
    */
   getSignedUrl(cfg: GetSignedUrlConfig, callback?: GetSignedUrlCallback):
       void|Promise<GetSignedUrlResponse> {
-    const expiresInMSeconds = new Date(cfg.expires).valueOf();
-
-    if (isNaN(expiresInMSeconds)) {
-      throw new Error('The expiration date provided was invalid.');
-    }
-
-    if (expiresInMSeconds < Date.now()) {
-      throw new Error('An expiration date cannot be in the past.');
-    }
-
-    const expiresInSeconds =
-        Math.round(expiresInMSeconds / 1000);  // The API expects seconds.
-
-    const config: GetSignedUrlConfigInternal = Object.assign({}, cfg);
-
-    config.action = ({
+    const verb = ({
       read: 'GET',
       write: 'PUT',
       delete: 'DELETE',
       resumable: 'POST',
-    } as {[index: string]: string})[config.action];
+    } as {[index: string]: HTTP_VERB})[cfg.action];
 
     const name = encodeURIComponent(this.name);
-    config.resource = '/' + this.bucket.name + '/' + name;
+    const resource = '/' + this.bucket.name + '/' + name;
 
-    let extensionHeadersString = '';
+    const config: GetUrlSignatureOptions = Object.assign({}, cfg, {
+      action: verb,
+      resource,
+    });
 
     if (config.action === 'POST') {
       config.extensionHeaders = Object.assign({}, config.extensionHeaders, {
@@ -2308,59 +2275,35 @@ class File extends ServiceObject<File> {
       });
     }
 
-    if (config.extensionHeaders) {
-      for (const headerName of Object.keys(config.extensionHeaders)) {
-        extensionHeadersString +=
-            `${headerName}:${config.extensionHeaders[headerName]}\n`;
-      }
-    }
+    this.storage.getUrlSignature(config)
+        .then(([query]) => {
+          if (typeof config.responseType === 'string') {
+            query['response-content-type'] = config.responseType!;
+          }
 
-    const blobToSign = [
-      config.action,
-      config.contentMd5 || '',
-      config.contentType || '',
-      expiresInSeconds,
-      extensionHeadersString + config.resource,
-    ].join('\n');
+          if (typeof config.promptSaveAs === 'string') {
+            query['response-content-disposition'] =
+                'attachment; filename="' + config.promptSaveAs + '"';
+          }
+          if (typeof config.responseDisposition === 'string') {
+            query['response-content-disposition'] =
+                config.responseDisposition!;
+          }
 
-    const authClient = this.storage.authClient;
-    authClient.sign(blobToSign)
-        .then(signature => {
-          authClient.getCredentials().then(credentials => {
-            const query = {
-              GoogleAccessId: credentials.client_email,
-              Expires: expiresInSeconds,
-              Signature: signature,
-            } as SignedUrlQuery;
+          if (this.generation) {
+            query.generation = this.generation;
+          }
 
-            if (typeof config.responseType === 'string') {
-              query['response-content-type'] = config.responseType!;
-            }
-
-            if (typeof config.promptSaveAs === 'string') {
-              query['response-content-disposition'] =
-                  'attachment; filename="' + config.promptSaveAs + '"';
-            }
-            if (typeof config.responseDisposition === 'string') {
-              query['response-content-disposition'] =
-                  config.responseDisposition!;
-            }
-
-            if (this.generation) {
-              query.generation = this.generation;
-            }
-
-            const parsedHost =
-                url.parse(config.cname || STORAGE_DOWNLOAD_BASE_URL);
-            const signedUrl = url.format({
-              protocol: parsedHost.protocol,
-              hostname: parsedHost.hostname,
-              pathname: config.cname ? name : this.bucket.name + '/' + name,
-              query,
-            });
-
-            callback!(null, signedUrl);
+          const parsedHost =
+              url.parse(config.cname || STORAGE_DOWNLOAD_BASE_URL);
+          const signedUrl = url.format({
+            protocol: parsedHost.protocol,
+            hostname: parsedHost.hostname,
+            pathname: config.cname ? name : this.bucket.name + '/' + name,
+            query,
           });
+
+          callback!(null, signedUrl);
         })
         .catch(err => {
           callback!(new SigningError(err.message));

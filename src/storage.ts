@@ -26,6 +26,7 @@ import {Bucket} from './bucket';
 import {Channel} from './channel';
 import {File} from './file';
 import {normalize} from './util';
+import * as http from 'http';
 
 export interface GetServiceAccountOptions {
   userProject?: string;
@@ -86,6 +87,36 @@ export interface GetBucketsRequest {
   pageToken?: string;
   userProject?: string;
 }
+
+export interface GetUrlSignatureOptions {
+  action: HTTP_VERB;
+  resource?: string;
+  cname?: string;
+  contentMd5?: string;
+  contentType?: string;
+  expires: string|number|Date;
+  extensionHeaders?: http.OutgoingHttpHeaders;
+  promptSaveAs?: string;
+  responseDisposition?: string;
+  responseType?: string;
+}
+
+export interface SignedUrlQuery {
+  GoogleAccessId: string;
+  Expires: number;
+  Signature: string;
+  generation?: number;
+  'response-content-type'?: string;
+  'response-content-disposition'?: string;
+}
+
+export type GetUrlSignatureResponse = [SignedUrlQuery];
+
+export interface GetUrlSignatureCallback {
+  (err: Error|null, query?: SignedUrlQuery): void;
+}
+
+export type HTTP_VERB = 'GET'|'DELETE'|'PUT'|'POST';
 
 
 /*! Developer Documentation
@@ -720,6 +751,68 @@ export class Storage extends Service {
 
           callback(null, camelCaseResponse, resp);
         });
+  }
+
+  /**
+   * Constructs a canonical request and returns a URL query object that
+   * can be used to construct a signed URL.
+   *
+   * @param {GetUrlSignatureOptions} options Configuration options.
+   * @param {GetUrlSignatureCallback} callback Callback function.
+   * @return {Prmoise<GetUrlSignatureResponse>} the signature to be used for composing a signed URL to the resource.
+   *
+   * @private
+   */
+  getUrlSignature(options: GetUrlSignatureOptions): Promise<GetUrlSignatureResponse>;
+  getUrlSignature(options: GetUrlSignatureOptions, callback: GetUrlSignatureCallback): void;
+  getUrlSignature(options: GetUrlSignatureOptions, callback?: GetUrlSignatureCallback): Promise<GetUrlSignatureResponse> | void {
+    const expiresInMSeconds = new Date(options.expires).valueOf();
+
+    if (isNaN(expiresInMSeconds)) {
+      throw new Error('The expiration date provided was invalid.');
+    }
+
+    if (expiresInMSeconds < Date.now()) {
+      throw new Error('An expiration date cannot be in the past.');
+    }
+
+    const expiresInSeconds =
+        Math.round(expiresInMSeconds / 1000);  // The API expects seconds.
+
+    let extensionHeadersString = '';
+
+    if (options.extensionHeaders) {
+      for (const headerName of Object.keys(options.extensionHeaders)) {
+        extensionHeadersString +=
+            `${headerName}:${options.extensionHeaders[headerName]}\n`;
+      }
+    }
+
+    const blobToSign = [
+      options.action,
+      options.contentMd5 || '',
+      options.contentType || '',
+      expiresInSeconds,
+      extensionHeadersString + options.resource,
+    ].join('\n');
+
+    this.authClient.sign(blobToSign)
+      .then(
+        (signature) => {
+          this.authClient.getCredentials().then(credentials => {
+            if (!credentials.client_email) {
+              throw new Error('Credential is missing client_email. Use a service account to sign requests.');
+            }
+
+            callback!(null, {
+              GoogleAccessId: credentials.client_email,
+              Expires: expiresInSeconds,
+              Signature: signature,
+            });
+          })
+        },
+      )
+      .catch(callback!);
   }
 }
 
