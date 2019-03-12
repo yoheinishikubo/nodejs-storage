@@ -30,7 +30,7 @@ import * as tmp from 'tmp';
 import * as url from 'url';
 import * as zlib from 'zlib';
 
-import {Bucket, File, FileOptions, GetFileMetadataOptions, PolicyDocument, SetFileMetadataOptions} from '../src';
+import {Bucket, File, FileOptions, GetFileMetadataOptions, PolicyDocument, SetFileMetadataOptions, Storage} from '../src';
 
 let promisified = false;
 let makeWritableStreamOverride: Function|null;
@@ -168,7 +168,9 @@ describe('File', () => {
     // tslint:disable-next-line:no-any
     FakeServiceObject.prototype.request = util.noop as any;
 
-    STORAGE = {
+    STORAGE = new Storage();
+
+    STORAGE = Object.assign(STORAGE, {
       createBucket: util.noop,
       request: util.noop,
       // tslint:disable-next-line: no-any
@@ -177,10 +179,11 @@ describe('File', () => {
           (callback.onAuthenticated || callback)(null, req);
         }
       },
-      bucket(name: string) {
+      bucket(name: string): Bucket {
         return new Bucket(this, name);
       },
-    };
+    // tslint: disable-next-line: no-any
+    } as any);
 
     BUCKET = new Bucket(STORAGE, 'bucket-name');
     file = new File(BUCKET, FILE_NAME);
@@ -2556,6 +2559,7 @@ describe('File', () => {
         assert.strictEqual(blobToSign.indexOf('POST'), 0);
         assert(blobToSign.indexOf('x-goog-resumable:start') > -1);
         done();
+        return Promise.resolve('signature');
       };
 
       file.getSignedUrl(config, assert.ifError);
@@ -2745,30 +2749,34 @@ describe('File', () => {
             });
       });
 
-      it('should throw if a date is invalid', () => {
+      it('should throw if a date is invalid', done => {
         const expires = new Date('31-12-2019');
 
-        assert.throws(() => {
-          file.getSignedUrl(
-              {
-                action: 'read',
-                expires,
-              },
-              () => {});
-        }, /The expiration date provided was invalid\./);
+        file.getSignedUrl(
+          {
+            action: 'read',
+            expires,
+          },
+          (err: Error) => {
+            assert(err);
+            assert(err.message.match(/The expiration date provided was invalid\./));
+            done();
+          });
       });
 
-      it('should throw if a date from the past is given', () => {
+      it('should throw if a date from the past is given', done => {
         const expires = Date.now() - 5;
 
-        assert.throws(() => {
-          file.getSignedUrl(
-              {
-                action: 'read',
-                expires,
-              },
-              () => {});
-        }, /An expiration date cannot be in the past\./);
+        file.getSignedUrl(
+          {
+            action: 'read',
+            expires,
+          },
+          (err: Error) => {
+            assert(err);
+            assert(err.message.match(/An expiration date cannot be in the past\./));
+            done();
+          });
       });
     });
 
@@ -2783,6 +2791,7 @@ describe('File', () => {
           const headers = 'x-goog-acl:public-read\nx-foo:bar\n';
           assert(blobToSign.indexOf(headers) > -1);
           done();
+          return Promise.resolve('signature');
         };
 
         directoryFile.getSignedUrl(
