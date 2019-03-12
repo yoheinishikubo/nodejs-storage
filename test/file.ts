@@ -168,9 +168,7 @@ describe('File', () => {
     // tslint:disable-next-line:no-any
     FakeServiceObject.prototype.request = util.noop as any;
 
-    STORAGE = new Storage();
-
-    STORAGE = Object.assign(STORAGE, {
+    STORAGE = Object.assign(new Storage(), {
       createBucket: util.noop,
       request: util.noop,
       // tslint:disable-next-line: no-any
@@ -184,6 +182,8 @@ describe('File', () => {
       },
     // tslint: disable-next-line: no-any
     } as any);
+
+    STORAGE.makeAuthenticatedRequest.authClient = STORAGE.authClient;
 
     BUCKET = new Bucket(STORAGE, 'bucket-name');
     file = new File(BUCKET, FILE_NAME);
