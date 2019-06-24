@@ -166,21 +166,49 @@ describe('storage', () => {
   });
 
   describe('upload a directory', () => {
-    it.only('should upload directory', async () => {
-      console.log(bucket.name);
-      const testBucket = storage.bucket('alex-test-bucket' + shortUUID());
-      const bucketMeta = await testBucket.create();
-      console.log(`${bucketMeta[0].name} is created`);
-      // const directoryPath = path.join(__dirname, '../../system-test/data');
-      const directoryPath = path.join(path.dirname(__dirname), '../../nodejs-logging');
-      const start = new Date();
-      // const [files] = await bucket.uploadDirectory(directoryPath, {recurse: true});
-      const [files] = await testBucket.uploadDirectory(directoryPath, {recurse: true});
-      const end = new Date().getTime() - start.getTime();
-      console.log(`${end}ms`);
-      // await bucket.uploadDirectory(directoryPath);
-      console.log('finished');
-      assert.strictEqual(files.length, Object.keys(FILES).length);
+    // it('should upload directory', async () => {
+    //   console.log(bucket.name);
+    //   const testBucket = storage.bucket('alex-test-bucket' + shortUUID());
+    //   const [bucketMeta] = await testBucket.create();
+    //   console.log(`${bucketMeta.name} is created`);
+    //   // const directoryPath = path.join(__dirname, '../../system-test/data');
+    //   const directoryPath = path.join(path.dirname(__dirname), '../../nodejs-logging');
+    //   const start = new Date();
+    //   // const [files] = await bucket.uploadDirectory(directoryPath, {recurse: true});
+    //   const [files] = await testBucket.uploadDirectory(directoryPath, {recurse: true});
+    //   const end = new Date().getTime() - start.getTime();
+    //   console.log(`${end}ms`);
+    //   // await bucket.uploadDirectory(directoryPath);
+    //   console.log('finished');
+    //   assert.strictEqual(files.length, Object.keys(FILES).length);
+    // });
+
+    it.only('should upload directory stream', done => {
+      const testBucket = storage.bucket('alex-test-bucket-' + shortUUID());
+      console.log(testBucket.name);
+      testBucket.create((err: Error, resp: any) => {
+        if(err) {
+          assert.ifError(err);
+        }
+        console.log(`bucket ${resp.name} is created successfully.`);
+        const directoryPath = path.join(path.dirname(__dirname), '../test/testdata');
+
+        const fileList: Array<{}> = [];
+        testBucket.uploadDirectoryStream(directoryPath, {recurse: true})
+          .on('error', (err) => {
+            console.log(err);
+            assert.ifError(err);
+          })
+          .on('data', (resp) => {
+            console.log(resp);
+            fileList.push(resp);
+          })
+          .on('end', () => {
+            console.log(`${fileList.length} files uploaded`);
+            done();
+          });
+
+      });
     });
   });
 

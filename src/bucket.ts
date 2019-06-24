@@ -50,6 +50,9 @@ import {
 import {Iam} from './iam';
 import {Notification} from './notification';
 import {Storage} from './storage';
+import * as streamEvents from 'stream-events';
+import * as through from 'through2';
+import { Duplex, Readable } from 'stream';
 
 interface SourceObject {
   name: string;
@@ -3189,19 +3192,6 @@ class Bucket extends ServiceObject {
     }
   }
 
-  uploadDirectory(
-    directoryPathString: string,
-    options?: UploadDirectoryOptions
-  ): Promise<UploadDirectoryResponse>;
-  uploadDirectory(
-    directoryPathString: string,
-    options: UploadDirectoryOptions,
-    callback: UploadDirectoryCallback
-  ): void;
-  uploadDirectory(
-    directoryPathString: string,
-    callback: UploadDirectoryCallback
-  ): void;
   /**
    * @typedef {object} UploadDirectoryOptions Configuration options for
    *     {@link Bucket#uploadDirectory}.
@@ -3302,16 +3292,11 @@ class Bucket extends ServiceObject {
    * //-
    * const [response] = await bucket.uploadDirectory('local-directory-path');
    */
-  uploadDirectory(
+  uploadDirectoryStream(
     directoryPathString: string,
-    optionsOrCallback?: UploadDirectoryOptions | UploadDirectoryCallback,
-    callback?: UploadDirectoryCallback
-  ): Promise<UploadDirectoryResponse> | void {
-    const options =
-      typeof optionsOrCallback === 'object' ? optionsOrCallback : {};
-    callback =
-      typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
-
+    options?: UploadDirectoryOptions
+  ): Readable {
+    options = options || {};
     const self = this;
     let stat: fs.Stats | Error;
     try {
@@ -3323,195 +3308,52 @@ class Bucket extends ServiceObject {
       throw new Error(`${directoryPathString} is an invalid directory`);
     }
 
-    const allList: UploadFileResponse[] = [];
-    const fileList: UploadFileResponse[] = [];
-    const fileArray: string[] = [];
+    const uploadStream = streamEvents(through({objectMode: true}));
     const pathDirName = path.dirname(directoryPathString);
-
     let ctr = 0;
     let dirCtr = 1;
 
-    getFileList3(directoryPathString);
+    streamFiles(directoryPathString);
 
-    // function getFileList2(directory: string) {
-    //   fs.readdir(directory, (err, items) => {
-    //     if (err) {
-    //       callback!(err);
-    //     }
-    //     items.forEach(item => {
-    //       const fullPath = path.join(directory, item);
-    //       fs.stat(fullPath, (err, stat) => {
-    //         if(err) {
-    //           callback!(err);
-    //         }
-    //         if (stat.isFile()) {
-    //           ctr++;
-    //           let destination = path.relative(pathDirName, fullPath);
-    //           if (process.platform === 'win32') {
-    //             destination = destination.replace(/\\/g, '/');
-    //           }
-    //           const uploadOptions = extend({}, {destination}, options);
-    //           self.upload(fullPath, uploadOptions, (err, resp) => {
-    //             ctr--;
-    //             if (err) {
-    //               fileList.push({fileName: uploadOptions.destination, status: err});
-    //             } else {
-    //             fileList.push({fileName: uploadOptions.destination, status: 'success'});
-    //             }
-    //             if (ctr === 0) {
-    //               callback!(null, fileList);
-    //             }
-    //           });
-    //         } else if (options.recurse && stat.isDirectory()) {
-    //           getFileList2(fullPath);
-    //         }
-    //       });
-    //     });
-    //   });
-    // }
-
-    // function getFileList4(directory: string) {
-    //   const localList: string[] = [];
-    //   let localCtr = 0;
-    //   fs.readdir(directory, (err, items) => {
-    //     if (err) {
-    //       throw new Error(`Error reading directory`);
-    //     }
-    //     dirCtr--;
-    //     localCtr += items.length;
-    //     items.forEach(item => {
-    //       const fullPath = path.join(directory, item);
-    //       fs.stat(fullPath, (err, stat) => {
-    //         if (err) {
-    //           throw new Error('Error getting file status');
-    //         }
-    //         localCtr--;
-    //         if (stat.isFile()) {
-    //           localList.push(fullPath);
-    //         } else if (options.recurse && stat.isDirectory()) {
-    //           dirCtr++;
-    //           getFileList4(fullPath);
-    //         }
-    //         if (localCtr === 0) {
-    //           onComplete2(localList);
-    //         }
-    //       });
-    //     });
-    //   });
-    // }
-
-    function getFileList3(directory: string) {
+    function streamFiles(directory: string) {
       fs.readdir(directory, (err, items) => {
-        if(err) {
-          throw new Error(`Error reading directory`);
+        if (err) {
+          throw (err);
         }
         dirCtr--;
-        ctr+= items.length;
         items.forEach(item => {
           const fullPath = path.join(directory, item);
           fs.stat(fullPath, (err, stat) => {
             if(err) {
-              throw new Error('Error getting file status');
+              throw (err);
             }
-            ctr--;
             if (stat.isFile()) {
-              fileArray.push(fullPath);
-            } else if (options.recurse && stat.isDirectory()) {
+              ctr++;
+              let destination = path.relative(pathDirName, fullPath);
+              if (process.platform === 'win32') {
+                destination = destination.replace(/\\/g, '/');
+              }
+              const uploadOptions = extend({}, {destination}, options);
+              self.upload(fullPath, uploadOptions, (err, resp) => {
+                ctr--;
+                if (err) {
+                  uploadStream.push({fileName: uploadOptions.destination, status: err});
+                } else {
+                  uploadStream.push({fileName: uploadOptions.destination, status: 'success'});
+                }
+                if (dirCtr ===0 && ctr === 0) {
+                  uploadStream.push(null);
+                }
+              });
+            } else if (options!.recurse && stat.isDirectory()) {
               dirCtr++;
-              getFileList3(fullPath);
-            }
-            if(dirCtr === 0 && ctr === 0) {
-              onComplete();
+              streamFiles(fullPath);
             }
           });
         });
       });
     }
-
-    async function onComplete() {
-      const limit = pLimit(10);
-      const resp = await Promise.all(
-        fileArray.map(file =>
-          limit(() => {
-            let destination = path.relative(pathDirName, file);
-            if (process.platform === 'win32') {
-              destination = destination.replace(/\\/g, '/');
-            }
-            const uploadOptions = extend({}, {destination}, options);
-            return self.upload(file, uploadOptions).then(
-              () => ({fileName: uploadOptions.destination, status: 'success'}),
-              (err: Error) => ({fileName: uploadOptions.destination, status: err})
-            );
-          })
-        )
-      );
-
-      callback!(null, resp);
-    }
-
-    async function onComplete2(localList: string[]) {
-      const limit = pLimit(10);
-      const resp = await Promise.all(
-        localList.map(file =>
-          limit(() => {
-            let destination = path.relative(pathDirName, file);
-            if (process.platform === 'win32') {
-              destination = destination.replace(/\\/g, '/');
-            }
-            const uploadOptions = extend({}, {destination}, options);
-            return self
-              .upload(file, uploadOptions)
-              .then(
-                () => ({
-                  fileName: uploadOptions.destination,
-                  status: 'success',
-                }),
-                (err: Error) => ({
-                  fileName: uploadOptions.destination,
-                  status: err,
-                })
-              );
-          })
-        )
-      );
-
-      allList.concat(resp);
-      if (dirCtr === 0) {
-        callback!(null, resp);
-      }
-    }
-
-    // function getFileList(directory: string) {
-    //   const items = fs.readdirSync(directory);
-    //   items.forEach(item => {
-    //     const fullPath = path.join(directory, item);
-    //     const stat = fs.lstatSync(fullPath);
-    //     if (stat.isFile()) {
-    //       fileList.push(fullPath);
-    //     } else if (options.recurse && stat.isDirectory()) {
-    //       getFileList(fullPath);
-    //     }
-    //   });
-    // }
-
-    // const limit = pLimit(10);
-    // Promise.all(
-    //   fileList.map(file =>
-    //     limit(() => {
-    //       let destination = path.relative(pathDirName, file);
-    //       if (process.platform === 'win32') {
-    //         destination = destination.replace(/\\/g, '/');
-    //       }
-    //       const uploadOptions = extend({}, {destination}, options);
-    //       return this.upload(file, uploadOptions).then(
-    //         () => ({fileName: uploadOptions.destination, status: 'success'}),
-    //         (err: Error) => ({fileName: uploadOptions.destination, status: err})
-    //       );
-    //     })
-    //   )
-    // ).then(resp => {
-    //   callback!(null, resp);
-    // }, callback);
+    return uploadStream as Readable;
   }
 
   makeAllFilesPublicPrivate_(
