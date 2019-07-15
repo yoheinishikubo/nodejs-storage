@@ -166,9 +166,20 @@ describe('storage', () => {
   });
 
   describe('upload a directory', () => {
-    it('should upload directory', async () => {
-      const directoryPath = path.join(__dirname, '../../system-test/data');
-      const [files] = await bucket.uploadDirectory(directoryPath);
+    it.only('should upload directory', async () => {
+      console.log(bucket.name);
+      const testBucket = storage.bucket('alex-test-bucket' + shortUUID());
+      const bucketMeta = await testBucket.create();
+      console.log(`${bucketMeta[0].name} is created`);
+      // const directoryPath = path.join(__dirname, '../../system-test/data');
+      const directoryPath = path.join(path.dirname(__dirname), '../../nodejs-logging');
+      const start = new Date();
+      // const [files] = await bucket.uploadDirectory(directoryPath, {recurse: true});
+      const [files] = await testBucket.uploadDirectory(directoryPath, {recurse: true});
+      const end = new Date().getTime() - start.getTime();
+      console.log(`${end}ms`);
+      // await bucket.uploadDirectory(directoryPath);
+      console.log('finished');
       assert.strictEqual(files.length, Object.keys(FILES).length);
     });
   });
